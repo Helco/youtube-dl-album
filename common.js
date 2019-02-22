@@ -6,6 +6,10 @@ var process = require("process");
 var path = require("path");
 var child_process = require("child_process");
 
+/**
+ * Creates a directory and all parent directories without any noise
+ * @param {string} p the directory to create
+ */
 function mkdirSilent(p) {
     var parts = path.normalize(p).split("/");
     var act = "";
@@ -16,48 +20,66 @@ function mkdirSilent(p) {
     });
 }
 
-//headers and redirCb are optional
-function download (u, headers, callback, redirCb) {
+/**
+ * Downloads a file using http or https, also regards redirections.
+ * @param {string} urlString URL of the file to download
+ * @param {object} [headers] Object of headers to send with the request
+ * @param {function} callback Function taking optional error and resulting response object
+ * @param {function} [redirCb] Function if redirect occurs taking the statuscode and the new location
+ */
+function download (urlString, headers, callback, redirCb) {
     var REDIRECT_STATUSES = [301, 302, 303, 307, 308];
-    var udata = url.parse(u);
+
+    // Preprocessing arguments
     if (typeof headers === "function") {
         redirCb = callback;
         callback = headers;
         headers = null;
     }
-    else
-        udata.header = headers;
+    if (typeof redirCb !== "function")
+        redirCb = (_, newLocation) => download(newLocation, headers, callback);
+
+    // Choosing protocol module
+    var urlObj = url.parse(urlString);
+    urlObj.header = headers;
     var mod = null;
-    if (udata.protocol === "http:")
+    if (urlObj.protocol === "http:")
         mod = http;
-    else if (udata.protocol === "https:")
+    else if (urlObj.protocol === "https:")
         mod = https;
     else
         callback("Invalid protocol", null);
-    mod.request(udata, function(res) {
+
+    // Sending the request
+    mod.request(urlObj, function(res) {
         if (!res)
             callback("Unknown request failure", null);
-        if (REDIRECT_STATUSES.indexOf(res.statusCode) >= 0) {
-            if (typeof redirCb === "function")
-                redirCb(res.statusCode, res.headers.location);
-            download(res.headers.location, headers, callback, redirCb);
-        }
+        else if (REDIRECT_STATUSES.indexOf(res.statusCode) >= 0)
+            redirCb(res.statusCode, res.headers.location);
         else if (res.statusCode != 200)
             callback("HTTP status code: " + res.statusCode, null);
         else
             callback(null, res);
-    }).on("error", function(e) { 
+    }).on("error", function(e) {
         callback(e ? "Request error: " + e : "Unknown request failure");
     }).end();
 }
 
-function downloadText(url, headers, callback, redirCb) {
+/**
+ * Downloads a file as text using http or https, also regards redirections.
+ * @param {string} urlString URL of the file to download
+ * @param {object} [headers] Object of headers to send with the request
+ * @param {function} callback Function taking optional error and resulting text
+ * @param {function} [redirCb] Function if redirect occurs taking the statuscode and the new location
+ */
+function downloadText(urlString, headers, callback, redirCb) {
     if (typeof headers === "function") {
         redirCb = callback;
         callback = headers;
         headers = null;
     }
-    download(url, headers, function(err, res) {
+
+    download(urlString, headers, function(err, res) {
         if (err)
             callback(err, null);
         else {
@@ -70,54 +92,10 @@ function downloadText(url, headers, callback, redirCb) {
     }, redirCb);
 }
 
-function downloadToFile(url, headers, fn, callback, redirCb) {
-    if (typeof fn === "function") {
-        redirCb = callback;
-        callback = fn;
-        fn = headers;
-        headers = {};
-    }
-    download(url, headers, function(err, res) {
-        if (err)
-            callback(err);
-        else {
-            try {
-                var stream = fn;
-                if (typeof fn === "string")
-                    stream = fs.createWriteStream(fn);
-                res.pipe(fn);
-                res.on("end", function() {
-                    callback(null);
-                });
-            }
-            catch(e) {
-                callback("Stream error: " + e);
-            }
-        }
-    }, redirCb);
-}
-
-function waterfall(arr, printFunc) {
-    if (arguments.length < 2)
-        printFunc = msg=>{ console.log(msg); };
-    (function _do(i, async) {
-        if (arr.length <= i)
-            return;
-        if (typeof arr[i] === "string") {
-            if (arr[i] === "async")
-                _do(i + 1, true);
-            else
-                console.log(arr[i]);
-        }
-        else if (async) {
-            arr[i]();
-            _do(i + 1, false);
-        }
-        else
-            arr[i](_do.bind(i + 1, false));
-    })(0, false);
-}
-
+/**
+ * Parses the arguments this process was called with in the form `( --NAME PARAM* )*`
+ * @returns {object} object of parsed options
+ */
 function readopts() {
     if (process.argv.length < 3)
         return null;
@@ -135,6 +113,10 @@ function readopts() {
     return opts;
 }
 
+/**
+ * Executes some command synchronously and returns its standard output
+ * @param {string} cmd Command to execute
+ */
 function exec(cmd) {
     try {
         return child_process.execSync(cmd, { encoding: "utf8" });
@@ -149,8 +131,6 @@ module.exports = {
     mkdirSilent: mkdirSilent,
     download: download,
     downloadText: downloadText,
-    downloadToFile: downloadToFile,
-    waterfall: waterfall,
     readopts: readopts,
     exec: exec
 }
